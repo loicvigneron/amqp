@@ -24,7 +24,7 @@ defmodule AMQP.Mixfile do
     [{:earmark, "~> 0.1", only: :docs},
      {:ex_doc, "~> 0.10", only: :docs},
      {:inch_ex, "~> 0.4", only: :docs},
-     {:amqp_client, github: "jbrisbin/amqp_client"}]
+     {:amqp_client, github: "loicvigneron/amqp_client"}]
   end
 
   defp description do
