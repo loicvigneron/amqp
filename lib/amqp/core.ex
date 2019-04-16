@@ -26,6 +26,7 @@ defmodule AMQP.Core do
   Record.defrecord :basic_deliver,       :'basic.deliver',       Record.extract(:'basic.deliver',       from_lib: "rabbit_common/include/rabbit_framing.hrl")
   Record.defrecord :basic_reject,        :'basic.reject',        Record.extract(:'basic.reject',        from_lib: "rabbit_common/include/rabbit_framing.hrl")
   Record.defrecord :basic_recover,       :'basic.recover',       Record.extract(:'basic.recover',       from_lib: "rabbit_common/include/rabbit_framing.hrl")
+  Record.defrecord :basic_recover_ok,    :'basic.recover_ok',    Record.extract(:'basic.recover_ok',    from_lib: "rabbit_common/include/rabbit_framing.hrl")
   Record.defrecord :exchange_declare_ok, :'exchange.declare_ok', Record.extract(:'exchange.declare_ok', from_lib: "rabbit_common/include/rabbit_framing.hrl")
   Record.defrecord :exchange_delete,     :'exchange.delete',     Record.extract(:'exchange.delete',     from_lib: "rabbit_common/include/rabbit_framing.hrl")
   Record.defrecord :exchange_delete_ok,  :'exchange.delete_ok',  Record.extract(:'exchange.delete_ok',  from_lib: "rabbit_common/include/rabbit_framing.hrl")
@@ -40,5 +41,8 @@ defmodule AMQP.Core do
   Record.defrecord :exchange_declare,    :'exchange.declare',    Record.extract(:'exchange.declare',    from_lib: "rabbit_common/include/rabbit_framing.hrl")
   Record.defrecord :queue_declare,       :'queue.declare',       Record.extract(:'queue.declare',       from_lib: "rabbit_common/include/rabbit_framing.hrl")
   Record.defrecord :exchange_bind,       :'exchange.bind',       Record.extract(:'exchange.bind',       from_lib: "rabbit_common/include/rabbit_framing.hrl")
-  Record.defrecord :amqp_params_network, :'amqp_params_network', Record.extract(:'amqp_params_network', from_lib: "amqp_client/include/amqp_client.hrl")
+  Record.defrecord :amqp_params_network, :amqp_params_network,   Record.extract(:amqp_params_network,   from_lib: "amqp_client/include/amqp_client.hrl")
+  Record.defrecord :amqp_params_direct,  :amqp_params_direct,    Record.extract(:amqp_params_direct,    from_lib: "amqp_client/include/amqp_client.hrl")
+  Record.defrecord :amqp_adapter_info,   :amqp_adapter_info,     Record.extract(:amqp_adapter_info,     from_lib: "amqp_client/include/amqp_client.hrl")
+  Record.defrecord :amqp_msg,            :amqp_msg,              Record.extract(:amqp_msg,              from_lib: "amqp_client/include/amqp_client.hrl")
 end

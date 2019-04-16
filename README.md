@@ -8,7 +8,9 @@ Simple Elixir wrapper for the Erlang RabbitMQ client.
 
 The API is based on Langohr, a Clojure client for RabbitMQ.
 
-Disclaimer: This wrapper library is built on top of a modified version of the Erlang RabbitMQ client, since currently the officially supported Erlang client is not rebar-friendly and is not available on Hex package manager.
+## Migration from 0.X to 1.0
+
+If you use amqp 0.X and plan to migrate to 1.0 please read our [migration guide](https://github.com/pma/amqp/wiki/Upgrade-from-0.X-to-1.0).
 
 ## Usage
 
@@ -16,7 +18,7 @@ Add AMQP as a dependency in your `mix.exs` file.
 
 ```elixir
 def deps do
-  [{:amqp, "0.1.4"}]
+  [{:amqp, "~> 1.1"}]
 end
 ```
 
@@ -71,15 +73,10 @@ defmodule Consumer do
   def init(_opts) do
     {:ok, conn} = Connection.open("amqp://guest:guest@localhost")
     {:ok, chan} = Channel.open(conn)
+    setup_queue(chan)
+
     # Limit unacknowledged messages to 10
-    Basic.qos(chan, prefetch_count: 10)
-    Queue.declare(chan, @queue_error, durable: true)
-    # Messages that cannot be delivered to any consumer in the main queue will be routed to the error queue
-    Queue.declare(chan, @queue, durable: true,
-                                arguments: [{"x-dead-letter-exchange", :longstr, ""},
-                                            {"x-dead-letter-routing-key", :longstr, @queue_error}])
-    Exchange.fanout(chan, @exchange, durable: true)
-    Queue.bind(chan, @queue, @exchange)
+    :ok = Basic.qos(chan, prefetch_count: 10)
     # Register the GenServer process as a consumer
     {:ok, _consumer_tag} = Basic.consume(chan, @queue)
     {:ok, chan}
@@ -101,28 +98,46 @@ defmodule Consumer do
   end
 
   def handle_info({:basic_deliver, payload, %{delivery_tag: tag, redelivered: redelivered}}, chan) do
-    spawn fn -> consume(chan, tag, redelivered, payload) end
+    # You might want to run payload consumption in separate Tasks in production
+    consume(chan, tag, redelivered, payload)
     {:noreply, chan}
   end
 
+  defp setup_queue(chan) do
+    {:ok, _} = Queue.declare(chan, @queue_error, durable: true)
+    # Messages that cannot be delivered to any consumer in the main queue will be routed to the error queue
+    {:ok, _} = Queue.declare(chan, @queue,
+                             durable: true,
+                             arguments: [
+                               {"x-dead-letter-exchange", :longstr, ""},
+                               {"x-dead-letter-routing-key", :longstr, @queue_error}
+                             ]
+                            )
+    :ok = Exchange.fanout(chan, @exchange, durable: true)
+    :ok = Queue.bind(chan, @queue, @exchange)
+  end
+
   defp consume(channel, tag, redelivered, payload) do
-    try do
-      number = String.to_integer(payload)
-      if number <= 10 do
-        Basic.ack channel, tag
-        IO.puts "Consumed a #{number}."
-      else
-        Basic.reject channel, tag, requeue: false
-        IO.puts "#{number} is too big and was rejected."
-      end
-    rescue
-      exception ->
-        # Requeue unless it's a redelivered message.
-        # This means we will retry consuming a message once in case of exception
-        # before we give up and have it moved to the error queue
-        Basic.reject channel, tag, requeue: not redelivered
-        IO.puts "Error converting #{payload} to integer"
+    number = String.to_integer(payload)
+    if number <= 10 do
+      :ok = Basic.ack channel, tag
+      IO.puts "Consumed a #{number}."
+    else
+      :ok = Basic.reject channel, tag, requeue: false
+      IO.puts "#{number} is too big and was rejected."
     end
+
+  rescue
+    # Requeue unless it's a redelivered message.
+    # This means we will retry consuming a message once in case of exception
+    # before we give up and have it moved to the error queue
+    #
+    # You might also want to catch :exit signal in production code.
+    # Make sure you call ack, nack or reject otherwise comsumer will stop
+    # receiving messages.
+    exception ->
+      :ok = Basic.reject channel, tag, requeue: not redelivered
+      IO.puts "Error converting #{payload} to integer"
   end
 end
 ```
@@ -157,6 +172,7 @@ connection record holds the pid of the connection itself, we can monitor it
 and get a notification when it goes down.
 
 Example implementation (only changes from the last example):
+
 ```elixir
 # 1. Extract your connect logic into a private method rabbitmq_connect
 
@@ -164,27 +180,23 @@ def init(_opts) do
   rabbitmq_connect
 end
 
-defp rabbitmq_connect
-    case Connection.open("amqp://guest:guest@localhost") do
-      {:ok, conn} ->
-        # Get notifications when the connection goes down
-        Process.monitor(conn.pid)
-        # Everything else remains the same
-        {:ok, chan} = Channel.open(conn)
-        Basic.qos(chan, prefetch_count: 10)
-        Queue.declare(chan, @queue_error, durable: true)
-        Queue.declare(chan, @queue, durable: true,
-                                    arguments: [{"x-dead-letter-exchange", :longstr, ""},
-                                                {"x-dead-letter-routing-key", :longstr, @queue_error}])
-        Exchange.fanout(chan, @exchange, durable: true)
-        Queue.bind(chan, @queue, @exchange)
-        {:ok, _consumer_tag} = Basic.consume(chan, @queue)
-        {:ok, chan}
-      {:error, _} ->
-        # Reconnection loop
-        :timer.sleep(10000)
-        rabbitmq_connect
-    end
+defp rabbitmq_connect do
+  case Connection.open("amqp://guest:guest@localhost") do
+    {:ok, conn} ->
+      # Get notifications when the connection goes down
+      Process.monitor(conn.pid)
+      # Everything else remains the same
+      {:ok, chan} = Channel.open(conn)
+      setup_queue(chan)
+      Basic.qos(chan, prefetch_count: 10)
+      {:ok, _consumer_tag} = Basic.consume(chan, @queue)
+      {:ok, chan}
+
+    {:error, _} ->
+      # Reconnection loop
+      :timer.sleep(10000)
+      rabbitmq_connect
+  end
 end
 
 # 2. Implement a callback to handle DOWN notifications from the system
@@ -197,7 +209,8 @@ end
 ```
 
 Now, when the connection drops, or if the server is down when your application
-starts, it will try to reconnect indefinitely until it succeeds. 
+starts, it will try to reconnect indefinitely until it succeeds.
+
 ## Types of arguments and headers
 
 The parameter `arguments` in `Queue.declare`, `Exchange.declare`, `Basic.consume` and the parameter `headers` in `Basic.publish` are a list of tuples in the form `{name, type, value}`, where `name` is a binary containing the argument/header name, `type` is an atom describing the AMQP field type and `value` a term compatible with the AMQP field type.
@@ -224,16 +237,84 @@ Valid argument names in `Exchange.declare` include:
 
 * "alternate-exchange"
 
+## Troubleshooting / FAQ
 
-## Upgrading from 0.0.6 to 0.1.0
+#### Consumer stops receiving messages
 
-Version 0.1.0 includes the following breaking changes:
+Most popular cause is your code not sending acknowledgement(ack, nack or reject)
+after receiving a message.
+You want to investigate if...
 
-  * Basic.consume now takes the consumer process pid as the third argument. This is optional
-  and defaults to the caller.
-  * When registering a consumer process with Basic.consume, this process will receive the
-  messages consumed from the Queue as the tuple `{:basic_deliver, payload, meta}` instead of
-  the previous format `{payload, meta}`.
-  * A consumer process registered with Basic.consume will have to handle (or ignore) the
-  following additional messages: `{:basic_consume_ok, %{consumer_tag: consumer_tag}}`, `{:basic_cancel, %{consumer_tag: consumer_tag}}`
-  and `{:basic_cancel_ok, %{consumer_tag: consumer_tag}}`.
+- an exception was raised and how it would be handled
+- :exit signal was thrown and how it would be handled
+- a message processing took long time.
+
+If you use GenServer in consumer, try storing number of messages the server is
+currently processing to the GenServer state.
+If the number equals `prefetch\_count`, those messages were left without
+acknowledgements and that's why consumer have stopped receiving more
+messages.
+
+#### Old version of Elixir or OTP
+
+OTP 17 and 18 are supported only on [version 0.1.x](https://github.com/pma/amqp/tree/v0.1).
+Please understand that we won't make further changes to 0.1 except for major security issues.
+
+#### Heartbeats
+
+In case the connection is dropped automatically, consider enabling heartbeats.
+You can set `heartbeat` option when you open a connection.
+
+For more details, read [this article](http://www.rabbitmq.com/heartbeats.html#tcp-proxies)
+
+#### Log related to amqp supervisors are too verbose
+
+Try the following configuration.
+
+```elixir
+config :logger, handle_otp_reports: false
+```
+
+Or try filtering out the messages at your application start:
+
+```elixir
+:logger.add_primary_filter(
+  :ignore_rabbitmq_progress_reports,
+  {&:logger_filters.domain/2, {:stop, :equal, [:progress]}}
+)
+```
+
+See [this comment](https://github.com/pma/amqp/issues/110#issuecomment-442761299) for the
+details.
+
+#### Lager conflicts with Elixir logger
+
+Lager is used by rabbit_common and it is not Elixir's best friend yet.
+You need a workaround.
+
+In mix.exs, you have to load :lager before :logger.
+
+```elixir
+  extra_applications: [:lager, :logger, :amqp]
+```
+
+Here is a sample configuration to silent rabbit_common logging.
+
+```elixir
+config :lager,
+  error_logger_redirect: false,
+  handlers: [level: :critical]
+```
+
+Check out
+[Lager](https://github.com/erlang-lager/lager#configuration) and [RabbitMQ
+documentation](https://www.rabbitmq.com/logging.html#advanced-configuration) for
+more information.
+
+#### Compile error on ranch_proxy_protocol with OTP 21
+
+Update amqp to [1.1.0](https://github.com/pma/amqp/releases/tag/v1.1.0) or a greater version.
+
+#### Does the library support AMQP 1.0?
+
+Currently the library doesn't support AMQP 1.0 and there is no plan to do so at the moment. Our main aim here (at least for now) is to provide a thin wrapper around [amqp_client](https://hex.pm/packages/amqp_client) for Elixir programmers.
