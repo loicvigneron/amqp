@@ -3,12 +3,17 @@ defmodule AMQP.Basic do
   Functions to publish, consume and acknowledge messages.
   """
 
-  require Record
   import AMQP.Core
-  alias AMQP.Utils
-  alias AMQP.Channel
+  alias AMQP.{Channel, Utils}
 
-  Record.defrecordp :amqp_msg, [props: p_basic(), payload: ""]
+  @type error :: {:error, reason :: :blocked | :closing}
+
+  @type exchange :: String.t
+  @type queue :: String.t
+  @type routing_key :: String.t
+  @type payload :: String.t
+  @type delivery_tag :: integer
+  @type consumer_tag :: String.t
 
   @doc """
   Publishes a message to an Exchange.
@@ -49,6 +54,7 @@ defmodule AMQP.Basic do
       :ok
 
   """
+  @spec publish(Channel.t, exchange, routing_key, payload, keyword) :: :ok | error
   def publish(%Channel{pid: pid}, exchange, routing_key, payload, options \\ []) do
     basic_publish =
       basic_publish(exchange:    exchange,
@@ -70,37 +76,56 @@ defmodule AMQP.Basic do
               user_id:          Keyword.get(options, :user_id,          :undefined),
               app_id:           Keyword.get(options, :app_id,           :undefined),
               cluster_id:       Keyword.get(options, :cluster_id,       :undefined))
-    :amqp_channel.cast pid, basic_publish, amqp_msg(props: p_basic, payload: payload)
+
+    case :amqp_channel.call(pid, basic_publish, amqp_msg(props: p_basic, payload: payload)) do
+      :ok -> :ok
+      error -> {:error, error}
+    end
   end
 
   @doc """
   Sets the message prefetch count or prefetech size (in bytes). If `global` is set to `true` this
   applies to the entire Connection, otherwise it applies only to the specified Channel.
   """
+  @spec qos(Channel.t, keyword) :: :ok | error
   def qos(%Channel{pid: pid}, options \\ []) do
-    basic_qos_ok() =
-      :amqp_channel.call pid,
-                         basic_qos(prefetch_size:  Keyword.get(options, :prefetch_size,  0),
-                                   prefetch_count: Keyword.get(options, :prefetch_count, 0),
-                                   global:         Keyword.get(options, :global,         false))
-    :ok
+    basic_qos = basic_qos(prefetch_size:  Keyword.get(options, :prefetch_size,  0),
+                          prefetch_count: Keyword.get(options, :prefetch_count, 0),
+                          global:         Keyword.get(options, :global,         false))
+
+    case :amqp_channel.call(pid, basic_qos) do
+      basic_qos_ok() -> :ok
+      error -> {:error, error}
+    end
   end
 
   @doc """
   Acknowledges one or more messages. If `multiple` is set to `true`, all messages up to the one
   specified by `delivery_tag` are considered acknowledged by the server.
   """
+  @spec ack(Channel.t, delivery_tag, keyword) :: :ok | error
   def ack(%Channel{pid: pid}, delivery_tag, options \\ []) do
-    :amqp_channel.call pid, basic_ack(delivery_tag: delivery_tag,
-                                      multiple: Keyword.get(options, :multiple, false))
+    basic_ack = basic_ack(delivery_tag: delivery_tag,
+                          multiple: Keyword.get(options, :multiple, false))
+
+    case :amqp_channel.call(pid, basic_ack) do
+      :ok -> :ok
+      error -> {:error, error}
+    end
   end
 
   @doc """
   Rejects (and, optionally, requeues) a message.
   """
+  @spec reject(Channel.t, delivery_tag, keyword) :: :ok | error
   def reject(%Channel{pid: pid}, delivery_tag, options \\ []) do
-    :amqp_channel.call pid, basic_reject(delivery_tag: delivery_tag,
-                                         requeue: Keyword.get(options, :requeue, true))
+    basic_reject = basic_reject(delivery_tag: delivery_tag,
+                                requeue: Keyword.get(options, :requeue, true))
+
+    case :amqp_channel.call(pid, basic_reject) do
+      :ok -> :ok
+      error -> {:error, error}
+    end
   end
 
   @doc """
@@ -111,10 +136,16 @@ defmodule AMQP.Basic do
   This is a RabbitMQ specific extension to AMQP 0.9.1. It is equivalent to reject, but allows rejecting
   multiple messages using the `multiple` option.
   """
+  @spec nack(Channel.t, delivery_tag, keyword) :: :ok | error
   def nack(%Channel{pid: pid}, delivery_tag, options \\ []) do
-    :amqp_channel.call pid, basic_nack(delivery_tag: delivery_tag,
-                                       multiple: Keyword.get(options, :multiple, false),
-                                       requeue: Keyword.get(options, :requeue,   true))
+    basic_nack = basic_nack(delivery_tag: delivery_tag,
+                            multiple: Keyword.get(options, :multiple, false),
+                            requeue: Keyword.get(options, :requeue,   true))
+
+    case :amqp_channel.call(pid, basic_nack) do
+      :ok -> :ok
+      error -> {:error, error}
+    end
   end
 
   @doc """
@@ -132,6 +163,7 @@ defmodule AMQP.Basic do
   has taken responsibility for it. In general, a lot of applications will not want these semantics, rather, they
   will want to explicitly acknowledge the receipt of a message and have `no_ack` with the default value of false.
   """
+  @spec get(Channel.t, queue, keyword) :: {:ok, String.t, map} | {:empty, map} | error
   def get(%Channel{pid: pid}, queue, options \\ []) do
     case :amqp_channel.call pid, basic_get(queue: queue, no_ack: Keyword.get(options, :no_ack, false)) do
       {basic_get_ok(delivery_tag: delivery_tag,
@@ -174,6 +206,7 @@ defmodule AMQP.Basic do
                          cluster_id: cluster_id}}
       basic_get_empty(cluster_id: cluster_id) ->
         {:empty, %{cluster_id: cluster_id}}
+      error -> {:error, error}
     end
   end
 
@@ -184,8 +217,14 @@ defmodule AMQP.Basic do
   potentially delivering it to another subscriber. Otherwise it will be redelivered
   to the original recipient.
   """
+  @spec recover(Channel.t, keyword) :: :ok | error
   def recover(%Channel{pid: pid}, options \\ []) do
-    :amqp_channel.call pid, basic_recover(requeue: Keyword.get(options, :requeue, false))
+    basic_recover = basic_recover(requeue: Keyword.get(options, :requeue, false))
+
+    case :amqp_channel.call(pid, basic_recover) do
+      basic_recover_ok() -> :ok
+      error -> {:error, error}
+    end
   end
 
   @doc """
@@ -205,6 +244,7 @@ defmodule AMQP.Basic do
     * `{:basic_cancel_ok, %{consumer_tag: consumer_tag}}` - Sent to the consumer process after a call to Basic.cancel
 
   """
+  @spec consume(Channel.t, String.t, pid | nil, keyword) :: {:ok, String.t} | error
   def consume(%Channel{} = chan, queue, consumer_pid \\ nil, options \\ []) do
     basic_consume =
       basic_consume(queue: queue,
@@ -224,10 +264,10 @@ defmodule AMQP.Basic do
       do_start_consumer(chan, consumer_pid)
     end
 
-    basic_consume_ok(consumer_tag: consumer_tag) =
-      :amqp_channel.subscribe(chan.pid, basic_consume, adapter_pid)
-
-    {:ok, consumer_tag}
+    case :amqp_channel.subscribe(chan.pid, basic_consume, adapter_pid) do
+      basic_consume_ok(consumer_tag: consumer_tag) -> {:ok, consumer_tag}
+      error -> {:error, error}
+    end
   end
 
   defp do_start_consumer(chan, consumer_pid) do
@@ -235,6 +275,8 @@ defmodule AMQP.Basic do
       basic_consume_ok(consumer_tag: consumer_tag) ->
         send consumer_pid, {:basic_consume_ok, %{consumer_tag: consumer_tag}}
         do_consume(chan, consumer_pid, consumer_tag)
+      error ->
+        send consumer_pid, error
     end
   end
 
@@ -301,9 +343,84 @@ defmodule AMQP.Basic do
   mean the server will not send any more messages for that consumer. The client may receive an
   arbitrary number of messages in between sending the cancel method and receiving the reply.
   """
+  @spec cancel(Channel.t, String.t, keyword) :: {:ok, String.t} | error
   def cancel(%Channel{pid: pid}, consumer_tag, options \\ []) do
     basic_cancel = basic_cancel(consumer_tag: consumer_tag, nowait: Keyword.get(options, :no_wait, false))
-    basic_cancel_ok(consumer_tag: consumer_tag) = :amqp_channel.call pid, basic_cancel
-    {:ok, consumer_tag}
+
+    case :amqp_channel.call(pid, basic_cancel) do
+      basic_cancel_ok(consumer_tag: consumer_tag) -> {:ok, consumer_tag}
+      error -> {:error, error}
+    end
+  end
+
+  @doc """
+  Registers a handler to deal with returned messages. The registered
+  process will receive `{:basic_return, payload, meta}` data structures.
+  """
+  @spec return(Channel.t, pid) :: :ok
+  def return(%Channel{pid: pid}, return_handler_pid) do
+    adapter_pid = spawn fn ->
+      Process.flag(:trap_exit, true)
+      Process.monitor(return_handler_pid)
+      Process.monitor(pid)
+      handle_return_messages(pid, return_handler_pid)
+    end
+
+    :amqp_channel.register_return_handler(pid, adapter_pid)
+  end
+
+  @doc """
+  Removes the return handler, if it exists. Does nothing if there is no
+  such handler.
+  """
+  @spec cancel_return(Channel.t) :: :ok
+  def cancel_return(%Channel{pid: pid}) do
+    :amqp_channel.unregister_return_handler(pid)
+  end
+
+  defp handle_return_messages(chan_pid, return_handler_pid) do
+    receive do
+      {basic_return(reply_code: reply_code,
+                    reply_text: reply_text,
+                    exchange: exchange,
+                    routing_key: routing_key),
+       amqp_msg(props: p_basic(content_type: content_type,
+                               content_encoding: content_encoding,
+                               headers: headers,
+                               delivery_mode: delivery_mode,
+                               priority: priority,
+                               correlation_id: correlation_id,
+                               reply_to: reply_to,
+                               expiration: expiration,
+                               message_id: message_id,
+                               timestamp: timestamp,
+                               type: type,
+                               user_id: user_id,
+                               app_id: app_id,
+                               cluster_id: cluster_id), payload: payload)} ->
+        send return_handler_pid, {:basic_return, payload, %{reply_code: reply_code,
+                                                            reply_text: reply_text,
+                                                            exchange: exchange,
+                                                            routing_key: routing_key,
+                                                            content_type: content_type,
+                                                            content_encoding: content_encoding,
+                                                            headers: headers,
+                                                            persistent: delivery_mode == 2,
+                                                            priority: priority,
+                                                            correlation_id: correlation_id,
+                                                            reply_to: reply_to,
+                                                            expiration: expiration,
+                                                            message_id: message_id,
+                                                            timestamp: timestamp,
+                                                            type: type,
+                                                            user_id: user_id,
+                                                            app_id: app_id,
+                                                            cluster_id: cluster_id}}
+
+        handle_return_messages(chan_pid, return_handler_pid)
+
+      {:DOWN, _ref, :process, _pid, reason} ->
+        exit(reason)
+    end
   end
 end

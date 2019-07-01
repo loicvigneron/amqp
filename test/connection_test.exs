@@ -22,5 +22,4 @@ defmodule ConnectionTest do
     assert {:ok, conn} = Connection.open "amqp://localhost"
     assert :ok = Connection.close(conn)
   end
-
 end

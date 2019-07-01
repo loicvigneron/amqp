@@ -1,30 +1,49 @@
 defmodule AMQP.Mixfile do
   use Mix.Project
 
-  @version "0.1.4"
+  @version "1.1.1"
 
   def project do
     [app: :amqp,
      version: @version,
-     elixir: "~> 1.0",
-     description: description,
-     package: package,
+     elixir: "~> 1.3",
+     description: description(),
+     package: package(),
      source_url: "https://github.com/pma/amqp",
-     deps: deps,
-     docs: [extras: ["README.md"], main: "extra-readme",
+     deps: deps(),
+     dialyzer: [
+       ignore_warnings: "dialyzer.ignore-warnings",
+       plt_add_deps: :transitive,
+       flags: [:error_handling, :race_conditions, :no_opaque, :underspecs]
+     ],
+     docs: [extras: ["README.md"], main: "readme",
             source_ref: "v#{@version}",
             source_url: "https://github.com/pma/amqp"]]
   end
 
   def application do
-    [applications: [:logger, :amqp_client]]
+    [applications: [:lager, :amqp_client]]
   end
 
   defp deps do
-    [{:earmark, "~> 0.1", only: :docs},
-     {:ex_doc, "~> 0.10", only: :docs},
-     {:inch_ex, "~> 0.4", only: :docs},
-     {:amqp_client, github: "loicvigneron/amqp_client"}]
+    [
+      {:amqp_client, "~> 3.7.11"},
+      {:rabbit_common, "~> 3.7.11"},
+
+      # We have an issue on rebar3 dependencies.
+      # https://github.com/pma/amqp/issues/78
+      {:goldrush, "~> 0.1.0"},
+      {:jsx, "~> 2.9"},
+      {:lager, "~> 3.6.5"},
+      {:ranch, "~> 1.7"},
+      {:recon, "~> 2.3"},
+
+      {:earmark, "~> 1.0", only: :docs},
+      {:ex_doc, "~> 0.15", only: :docs},
+      {:inch_ex, "~> 0.5", only: :docs},
+
+      {:dialyxir, "~> 0.5", only: :dev, runtime: false}
+    ]
   end
 
   defp description do

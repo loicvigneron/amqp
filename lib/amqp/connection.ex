@@ -8,6 +8,7 @@ defmodule AMQP.Connection do
   alias AMQP.Connection
 
   defstruct [:pid]
+  @type t :: %Connection{pid: pid}
 
   @doc """
   Opens an new Connection to an AMQP broker.
@@ -30,9 +31,9 @@ defmodule AMQP.Connection do
     * `:port` - The port the broker is listening on (defaults to `5672`);
     * `:channel_max` - The channel_max handshake parameter (defaults to `0`);
     * `:frame_max` - The frame_max handshake parameter (defaults to `0`);
-    * `:heartbeat` - The hearbeat interval in seconds (defaults to `0` - turned off);
-    * `:connection_timeout` - The connection timeout in milliseconds (defaults to `infinity`);
-    * `:ssl_options` - Enable SSL by setting the location to cert files (defaults to `none`);
+    * `:heartbeat` - The hearbeat interval in seconds (defaults to `10`);
+    * `:connection_timeout` - The connection timeout in milliseconds (defaults to `50000`);
+    * `:ssl_options` - Enable SSL by setting the location to cert files (defaults to `:none`);
     * `:client_properties` - A list of extra client properties to be sent to the server, defaults to `[]`;
     * `:socket_options` - Extra socket options. These are appended to the default options. \
                           See http://www.erlang.org/doc/man/inet.html#setopts-2 and http://www.erlang.org/doc/man/gen_tcp.html#connect-4 \
@@ -59,6 +60,12 @@ defmodule AMQP.Connection do
                                      fail_if_no_peer_cert: true]
   ```
 
+  # Connection name
+  RabbitMQ supports user-specified connection names since version 3.6.2.
+
+  Connection names are human-readable strings that will be displayed in the management UI.
+  Connection names do not have to be unique and cannot be used as connection identifiers.
+
   ## Examples
 
       iex> AMQP.Connection.open host: \"localhost\", port: 5672, virtual_host: \"/\", username: \"guest\", password: \"guest\"
@@ -67,10 +74,13 @@ defmodule AMQP.Connection do
       iex> AMQP.Connection.open \"amqp://guest:guest@localhost\"
       {:ok, %AMQP.Connection{}}
 
+      iex> AMQP.Connection.open \"amqp://guest:guest@localhost\", \"a-connection-with-a-name\"
+      {:ok, %AMQP.Connection{}}
   """
-  def open(options \\ [])
+  @spec open(keyword|String.t, String.t|:undefined) :: {:ok, t} | {:error, atom} | {:error, any}
+  def open(options \\ [], name \\ :undefined)
 
-  def open(options) when is_list(options) do
+  def open(options, name) when is_list(options) do
     options = options
     |> normalize_ssl_options
 
@@ -78,22 +88,23 @@ defmodule AMQP.Connection do
       amqp_params_network(username:           Keyword.get(options, :username,           "guest"),
                           password:           Keyword.get(options, :password,           "guest"),
                           virtual_host:       Keyword.get(options, :virtual_host,       "/"),
-                          host:               Keyword.get(options, :host,               'localhost') |> to_char_list,
+                          host:               Keyword.get(options, :host,               'localhost') |> to_charlist,
                           port:               Keyword.get(options, :port,               :undefined),
                           channel_max:        Keyword.get(options, :channel_max,        0),
                           frame_max:          Keyword.get(options, :frame_max,          0),
-                          heartbeat:          Keyword.get(options, :heartbeat,          0),
-                          connection_timeout: Keyword.get(options, :connection_timeout, :infinity),
+                          heartbeat:          Keyword.get(options, :heartbeat,          10),
+                          connection_timeout: Keyword.get(options, :connection_timeout, 50000),
                           ssl_options:        Keyword.get(options, :ssl_options,        :none),
                           client_properties:  Keyword.get(options, :client_properties,  []),
-                          socket_options:     Keyword.get(options, :socket_options,     []))
+                          socket_options:     Keyword.get(options, :socket_options,     []),
+                          auth_mechanisms:    Keyword.get(options, :auth_mechanisms,    [&:amqp_auth_mechanisms.plain/3, &:amqp_auth_mechanisms.amqplain/3]))
 
-    do_open(amqp_params)
+    do_open(amqp_params, name)
   end
 
-  def open(uri) when is_binary(uri) do
-    case uri |> to_char_list |> :amqp_uri.parse do
-      {:ok, amqp_params} -> do_open(amqp_params)
+  def open(uri, name) when is_binary(uri) do
+    case uri |> to_charlist |> :amqp_uri.parse do
+      {:ok, amqp_params} -> do_open(amqp_params, name)
       error              -> error
     end
   end
@@ -101,12 +112,16 @@ defmodule AMQP.Connection do
   @doc """
   Closes an open Connection.
   """
+  @spec close(t) :: :ok | {:error, any}
   def close(conn) do
-    :amqp_connection.close(conn.pid)
+    case :amqp_connection.close(conn.pid) do
+      :ok -> :ok
+      error -> {:error, error}
+    end
   end
 
-  defp do_open(amqp_params) do
-    case :amqp_connection.start(amqp_params) do
+  defp do_open(amqp_params, name) do
+    case :amqp_connection.start(amqp_params, name) do
       {:ok, pid} -> {:ok, %Connection{pid: pid}}
       error      -> error
     end
@@ -114,8 +129,8 @@ defmodule AMQP.Connection do
 
   defp normalize_ssl_options(options) when is_list(options) do
     for {k, v} <- options do
-      if k in [:cacertfile, :cacertfile, :cacertfile] do
-        {k, to_char_list(v)}
+      if k in [:cacertfile, :certfile, :keyfile] do
+        {k, to_charlist(v)}
       else
         {k, v}
       end
